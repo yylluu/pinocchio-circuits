@@ -1,115 +1,122 @@
 #include "exp-mod.h"
 
 void outsource(struct Input *input, struct NIZKInput *nizkinput, struct Output *output) {
-
-
+	
+	//Verify what n can be produced by p and q
 	struct BigNum nn;
-
 	mul_short(&nizkinput->p, &nizkinput->q, &nn);
 
+	//Calcualte phi by multiplying p-1 and q-1
 	struct BigNum phi;
-	sub_one(&nizkinput->p);
-	sub_one(&nizkinput->q);
-
+	sub_one_short(&nizkinput->p);
+	sub_one_short(&nizkinput->q);
 	mul_short(&nizkinput->p, &nizkinput->q, &phi);
 
-	//output->isKeyMatched = check_keys(&nn, &input->n, &phi, input->e, &nizkinput->d);
+	//verify n's reciprocal is correct
+	int isReciprocal = checkIsTrueReciprocal(&input->n, &input->nReciprocal);
 
-
+	//verify phi, n get from public, n produced by p and q, e and d are matched
+	output->isKeyMatched = (isReciprocal & check_keys(&nn, &input->n, &phi, nizkinput->t, input->e, &nizkinput->d));
+	
 	expModByReciprocal(&nizkinput->b, input->e, &input->n, &input->nReciprocal, &output->res);
-
 }
 
 
-int check_keys(struct BigNum *nn, struct BigNum *n, struct BigNum *phi, u32 e, struct BigNum *d){
+
+
+int check_keys(struct BigNum *nn, struct BigNum *n, struct BigNum *phi, u32 t, u32 e, struct BigNum *d){
 	int i;
 	int val = 0;
+
 	if (e == 3) {
 		val = 1;
 	}
+
+	// val = given n != produced n ?  0 : val 
 	for(i = 0; i < WORDS; i += 1){
 		if(!(n->num[i] == nn->num[i]))
 			val = 0;
 	}
-	/*
-	   struct BigNum dTmp;
-	   struct BigNum res;
-	   for (i = 0; i < WORDS; i += 1) {
-	   dTmp.num[i] = d->num[i];
-	   }
-	   oneBitLeftShift(&dTmp);
-	   add(d, &dTmp);
-	   mod_short(&dTmp, phi, &res);
 
-	   for(i = 1; i < WORDS; i += 1){
-	   if( !(res.num[i] == 0)){
-	   val = 0;
-	   }
-	   }
-	   if(!(res.num[0] == 1)){
-	   val = 0;
-	   }
-	 */
+	//res = e * d
+	struct BigNum res;
+	for (i = 0; i < WORDS; i += 1) {
+		res.num[i] = d->num[i];
+	}
+	oneBitLeftShift(&res);
+	add(d, &res); //res = e * d when e = 3
+	
+	//res1 = phi * N + 1
+	struct BigNum res1;
+	for (i = 0; i < WORDS - 1; i += 1) {
+		res1.num[i] += phi->num[i] * t;
+		u32 carry = res1.num[i] >> WORD_WIDTH;
+		res1.num[i+1] += carry;
+		res1.num[i] = res1.num[i] & NEG_ONE;
+	}
+	res1.num[WORDS - 1] += phi->num[WORDS - 1] * t;
+	add_one(&res1);
+
+	// val = (e * d) != (phi * N + 1) ?  0 : val 
+	for(i = 0; i < WORDS; i += 1) {
+		if( !(res1.num[i] == res.num[i])){
+			val = 0;
+		} 
+	}
+
 	return val;
 }
 
 
-//left shift 1 single bit
+
+
 void oneBitLeftShift(struct BigNum *a) {
-	a->num[WORDS-1] = (a->num[WORDS-1] << 1) & 0x1ffffffff;
+	a->num[WORDS-1] = (a->num[WORDS-1] << 1) & NEG_ONE_OVERFLOW;
 	int i;
 	for (i = WORDS - 2; i >=0; i = i - 1) {
-		a->num[i+1] = a->num[i+1] | ((0x80000000 & a->num[i]) >> 31);
-		a->num[i] = (a->num[i] << 1) & 0xffffffff;
+		a->num[i+1] = a->num[i+1] | ((SIGN_BIT & a->num[i]) >> (WORD_WIDTH-1));
+		a->num[i] = (a->num[i] << 1) & NEG_ONE;
 	}
 }
 
 
-//is greater or equal
-int greaterOrEqual(struct BigNum *a, struct BigNum *b) {
-	int flag = 1;
-	int val = 1;
-	int i;
-	for (i = WORDS - 1; i >= 0; i = i - 1) {
-		if ( flag == 1 ){
-			if(a->num[i] < b->num[i]){
-				flag = 0;
-				val = 0;
-			} 
-			if (a->num[i] > b->num[i]){
-				flag = 0;
-				val = 1;
-			}
-		}
-	}
-	return val;
-}
 
 
-
-
-//add
 void add(struct BigNum *a, struct BigNum *b) {
 	u32 carry = 0;
 	int i;
 	for (i = 0; i < WORDS - 1; i += 1) {
 		b->num[i] = a->num[i] + b->num[i]+ carry;
-		//carry = (b->num[i] & 0xffffffff00000000) >> 32;
-		carry = b->num[i] >> 32;
-		b->num[i] = b->num[i] & 0xffffffff;
+		carry = b->num[i] >> WORD_WIDTH;
+		b->num[i] = b->num[i] & NEG_ONE;
 	}
 	b->num[WORDS-1] = a->num[WORDS-1] + b->num[WORDS-1]+ carry;
 }
 
 
+
+
+void add_one(struct BigNum *a) {
+	u32 carry = 1;
+	int i;
+	for (i = 0; i < WORDS - 1; i += 1) {
+		a->num[i] = a->num[i] + carry;
+		carry = a->num[i] >> WORD_WIDTH;
+		a->num[i] = a->num[i] & NEG_ONE;
+	}
+	a->num[WORDS-1] = a->num[WORDS-1] + carry;
+}
+
+
+
 //subtracted by one, for shorter
-void sub_one(struct ShortBigNum *a) {
+void sub_one_short(struct ShortBigNum *a) {
 	int i;
 	u32 carry1 = 0;
 	for (i = 0; i < WORDS_SHORT; i += 1) {
-		a->num[i] = a->num[i] + 0xffffffff + carry1;
-		carry1 = a->num[i] >> 32;
-		a->num[i] = a->num[i] & 0xffffffff;
+		a->num[i] = a->num[i] + NEG_ONE + carry1;
+		carry1 = a->num[i] >> WORD_WIDTH;
+		a->num[i] = a->num[i] & NEG_ONE;
 	}
 }
 
@@ -127,40 +134,11 @@ void mul_short(struct ShortBigNum *a, struct ShortBigNum *b, struct BigNum *res)
 		for (n = 0; n < WORDS_SHORT; n += 1) {
 			int ind = n + m;
 			res->num[ind] += a->num[m] * b->num[n];
-			int carry = res->num[ind] >> 32;
-			if( !(carry == 0) ) {
+			u32 carry = res->num[ind] >> WORD_WIDTH;
+			//if( !(carry == 0) ) {
 				res->num[ind+1] = res->num[ind+1] + carry;
-				res->num[ind] = res->num[ind] & 0xffffffff;
-			}
-		}
-	}
-}
-
-
-//module for shorter
-void mod_short(struct BigNum *n, struct BigNum *d, struct BigNum *r) {
-	int k;
-	for (k = 0; k < WORDS; k += 1) {
-		r->num[k] = 0;
-	}
-	int cond = n->num[WORDS-1] & 0x100000000;
-	if ( !(cond == 0) ) {
-		oneBitLeftShift(r);
-		r->num[0] = r->num[0] | 0x1;
-		//r->num[0] = r->num[0] | (n->num[WORDS-1] >> 32);
-		if(greaterOrEqual(r, d) == 1) {
-			sub(r, d);
-		}
-	}
-	int i;
-	int j;
-	for (i = WORDS - 1; i >= 0; i = i - 1) {
-		for (j = 31; j >= 0; j = j - 1) {
-			oneBitLeftShift(r);
-			r->num[0] = r->num[0] | ( (n->num[i] >> j) & 0x1 );
-			if(greaterOrEqual(r, d) == 1) {
-				sub(r, d);
-			}
+				res->num[ind] = res->num[ind] & NEG_ONE;
+			//}
 		}
 	}
 }
@@ -168,71 +146,47 @@ void mod_short(struct BigNum *n, struct BigNum *d, struct BigNum *r) {
 
 
 
-//int checkIsTrueReciprocal(struct BigNum *, struct InflatBigNum *);
-
-
-void sub_new(struct LongBigNum * a, struct LongBigNum * b, struct BigNum * res){
-
-	u32 carry = 1;
-	int i;
-	for (i = 0; i < WORDS_LONG; i += 1) {
-		a->num[i] = a->num[i] + ( (~b->num[i]) & 0xffffffff ) + carry;
-		carry = a->num[i] >> 32;
-		a->num[i] = a->num[i] & 0xffffffff;
-	}
-	for (i = 0; i < WORDS; i += 1) {
-		res->num[i] = a->num[i];
-	}
-}
-
-
-void mul_new(struct BigNum * a, struct InflatBigNum * b, struct LongBigNum * res){
-
+int checkIsTrueReciprocal(struct BigNum * n, struct InflatBigNum * nRe){
 	struct InflatLongBigNum tmp;
+	int i;
 	int j;
-	int k;
-	for (j = 0; j < WORDS; j += 1) {
-		for (k = 0; k < WORDS_INFLAT; k += 1) {
-			int ind = j + k;
-			tmp.num[ind] += a->num[j] * b->num[k];
-			int carry = tmp.num[ind] >> 32;
-			if( !(carry == 0) ) {
+	for (i = 0; i < WORDS; i += 1) {
+		for (j = 0; j < WORDS_INFLAT; j += 1) {
+			int ind = i + j;
+			tmp.num[ind] += n->num[i] * nRe->num[j];
+			u32 carry = tmp.num[ind] >> WORD_WIDTH;
+			//if( !(carry == 0) ) {
 				tmp.num[ind+1] = tmp.num[ind+1] + carry;
-				tmp.num[ind] = tmp.num[ind] & 0xffffffff;
-			}
+				tmp.num[ind] = tmp.num[ind] & NEG_ONE;
+			//}
 		}
 	}
-	int i;
-	for (i = 0; i < WORDS_LONG; i += 1) {
-		res->num[i] = tmp.num[i];
+	int flag = 1;
+	if ( !(tmp.num[WORDS + WORDS_INFLAT - 1] == 0) ){
+		flag = 0;
 	}
+	for (i = WORDS + WORDS_INFLAT - 2; i >= WORDS + WORDS_INFLAT - 1 - WORDS; i = i - 1) {
+			if ( !(tmp.num[i] == NEG_ONE) ){
+				flag = 0;
+			}
+	}
+	return flag;
 }
 
-void divideByMulReciprocal(struct LongBigNum * a, struct InflatBigNum * b, struct InflatBigNum * res1){
-	struct SuperBigNum tmpRes;
-	int i;
-	for (i = 0; i < WORDS_SUPER; i += 1) {
-		tmpRes.num[i] = 0;
-	}
-	int j;
-	int k;
-	for (j = 0; j < WORDS_LONG; j += 1) {
-		for (k = 0; k < WORDS_INFLAT; k += 1) {
-			int ind = j + k;
-			tmpRes.num[ind] += a->num[j] * b->num[k];
-			int carry = tmpRes.num[ind] >> 32;
-			if( !(carry == 0) ) {
-				tmpRes.num[ind+1] = tmpRes.num[ind+1] + carry;
-				tmpRes.num[ind] = tmpRes.num[ind] & 0xffffffff;
-			}
-		}
-	}
-	int m;
-	for (m = WORDS_SUPER - WORDS_INFLAT + 1; m < WORDS_SUPER; m += 1) {
-		int ind = m - WORDS_SUPER + WORDS_INFLAT - 1;
-		res1->num[ind] = tmpRes.num[m];
-	}
+
+
+void expModByReciprocal(struct BigNum * b, u32 e, struct BigNum * n, struct InflatBigNum * nReciprocal, struct BigNum *res) {
+	
+	struct LongBigNum tmp;
+
+//Let's make it only good for 3 as PK exp
+	mul(b, b, &tmp);
+	modByUsingReciprocal(&tmp, n, nReciprocal, res);
+	mul(res, b, &tmp);
+	modByUsingReciprocal(&tmp, n, nReciprocal, res);
 }
+
+
 
 
 void modByUsingReciprocal(struct LongBigNum * n, struct BigNum * d, struct InflatBigNum * dR, struct BigNum * r) {
@@ -244,16 +198,78 @@ void modByUsingReciprocal(struct LongBigNum * n, struct BigNum * d, struct Infla
 }
 
 
-void expModByReciprocal(struct BigNum * b, u32 e, struct BigNum * n, struct InflatBigNum * nReciprocal, struct BigNum *res2) {
 
-	struct LongBigNum tmp;
 
-	//Let's make it only good for 3 as PK exp
-	mul(b, b, &tmp);
-	modByUsingReciprocal(&tmp, n, nReciprocal, res2);
-	mul(res2, b, &tmp);
-	modByUsingReciprocal(&tmp, n, nReciprocal, res2);
+void divideByMulReciprocal(struct LongBigNum * a, struct InflatBigNum * b, struct InflatBigNum * res1){
+	struct SuperBigNum tmpRes;
+	int i;
+	for (i = 0; i < WORDS_SUPER; i += 1) {
+		tmpRes.num[i] = 0;
+	}
+	int j;
+	for (i = 0; i < WORDS_LONG; i += 1) {
+		for (j = 0; j < WORDS_INFLAT; j += 1) {
+			int ind = j + i;
+			tmpRes.num[ind] += a->num[i] * b->num[j];
+			u32 carry = tmpRes.num[ind] >> WORD_WIDTH;
+			//if( !(carry == 0) ) {
+				tmpRes.num[ind+1] = tmpRes.num[ind+1] + carry;
+				tmpRes.num[ind] = tmpRes.num[ind] & NEG_ONE;
+			//}
+		}
+	}
+	for (i = WORDS_SUPER - WORDS_INFLAT + 1; i < WORDS_SUPER; i += 1) {
+		int ind = i - WORDS_SUPER + WORDS_INFLAT - 1;
+		res1->num[ind] = tmpRes.num[i];
+	}
+	res1->num[WORDS_INFLAT-1] = 0;
 }
+
+
+
+
+void sub_new(struct LongBigNum * a, struct LongBigNum * b, struct BigNum * res){
+	
+	u32 carry = 1;
+	int i;
+	for (i = 0; i < WORDS_LONG; i += 1) {
+		a->num[i] = a->num[i] + ( (~b->num[i]) & NEG_ONE ) + carry;
+		carry = a->num[i] >> WORD_WIDTH;
+		a->num[i] = a->num[i] & NEG_ONE;
+	}
+	for (i = 0; i < WORDS; i += 1) {
+		res->num[i] = a->num[i];
+	}
+}
+
+
+
+
+void mul_new(struct BigNum * a, struct InflatBigNum * b, struct LongBigNum * res){
+	
+	struct InflatLongBigNum tmp;
+	int i;
+	for (i = 0; i < WORDS_LONG_INFLAT; i += 1) {
+		tmp.num[i] = 0;
+	}
+	int j;
+	for (i = 0; i < WORDS; i += 1) {
+		for (j = 0; j < WORDS_INFLAT; j += 1) {
+			int ind = i + j;
+			tmp.num[ind] += a->num[i] * b->num[j];
+			u32 carry = tmp.num[ind] >> WORD_WIDTH;
+			//if( !(carry == 0) ) {
+				tmp.num[ind+1] = tmp.num[ind+1] + carry;
+				tmp.num[ind] = tmp.num[ind] & NEG_ONE;
+			//}
+		}
+	}
+	for (i = 0; i < WORDS_LONG; i += 1) {
+		res->num[i] = tmp.num[i];
+	}
+}
+
+
 
 
 //multiplication
@@ -268,11 +284,11 @@ void mul(struct BigNum *a, struct BigNum *b, struct LongBigNum *res) {
 		for (k = 0; k < WORDS; k += 1) {
 			int ind = j + k;
 			res->num[ind] += a->num[j] * b->num[k];
-			int carry = res->num[ind] >> 32;
-			if( !(carry == 0) ) {
+			u32 carry = res->num[ind] >> WORD_WIDTH;
+			//if( !(carry == 0) ) {
 				res->num[ind+1] = res->num[ind+1] + carry;
-				res->num[ind] = res->num[ind] & 0xffffffff;
-			}
+				res->num[ind] = res->num[ind] & NEG_ONE;
+			//}
 		}
 	}
 }
