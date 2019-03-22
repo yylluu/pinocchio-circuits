@@ -1,4 +1,4 @@
-#include "keyPairing.h"
+#include "keyChecking.h"
 
 void outsource(struct Input *input, struct NIZKInput *nizkinput, struct Output *output) {
 	
